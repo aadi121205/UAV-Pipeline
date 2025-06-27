@@ -3,7 +3,29 @@ import threading
 from dronekit import connect, VehicleMode, LocationGlobalRelative
 from math import radians, cos, sin, asin, sqrt
 from Map import Map  # Ensure your Map class provides needed staticmethods
+import os
+import cv2
 
+OutputDirectory = os.path.join(os.getcwd(), "Output")
+if not os.path.exists(OutputDirectory):
+    os.makedirs(OutputDirectory)
+
+
+
+def CaptureImage(OutputDirectory=OutputDirectory, image_index=0):
+    cap = cv2.VideoCapture(0)
+    if not cap.isOpened():
+        print("Error: Could not open video device.")
+        return None
+    ret, frame = cap.read()
+    if not ret:
+        print("Error: Could not read frame from video device.")
+        return None
+    filename = os.path.join(OutputDirectory, f"image_{int(time.time())}_{image_index}.jpg")
+    cv2.imwrite(filename, frame)
+    cap.release()
+    print(f"Image captured and saved to {filename}")
+    return filename
 
 def haversine(lon1, lat1, lon2, lat2):
     lon1, lat1, lon2, lat2 = map(radians, [lon1, lat1, lon2, lat2])
@@ -13,6 +35,7 @@ def haversine(lon1, lat1, lon2, lat2):
     )
     c = 2 * asin(sqrt(a))
     return c * 6371 * 1000  # meters
+
 
 def Caluate_best_misssion(NW=(28.75375609, 77.11578556), Altitude=6):
     # Example input
@@ -24,16 +47,17 @@ def Caluate_best_misssion(NW=(28.75375609, 77.11578556), Altitude=6):
     mymap = Map(
         square_corners=corners,
         altitude=Altitude,  # meters
-        sensor_width_mm = 6.4,
-        sensor_height_mm = 4.0,
-        focal_length_mm = 1.93, # use RGB value
-        image_width_px = 1280,   # RGB maximum resolution
-        image_height_px = 800,   # RGB maximum resolution
-        overlap_front=0.7,
-        overlap_side=0.7
+        sensor_width_mm=6.4,
+        sensor_height_mm=4.0,
+        focal_length_mm=1.93,  # use RGB value
+        image_width_px=1280,  # RGB maximum resolution
+        image_height_px=800,  # RGB maximum resolution
+        overlap_front=0.5,
+        overlap_side=0.5,
     )
     waypoints = mymap.get_waypoints()
     return waypoints
+
 
 class Telem:
     def __init__(self):
@@ -43,6 +67,7 @@ class Telem:
         time.sleep(2)
         threading.Thread(target=self.send_telemetry_data, daemon=True).start()
         self.execute_maping_mission()
+        self.close()
 
     def connect_uav(self):
         try:
@@ -75,7 +100,7 @@ class Telem:
                     "velocity": v.velocity if v else None,
                     "last_heartbeat": v.last_heartbeat if v else None,
                 }
-                print("TELEMETRY:", telemetry)
+                #print("TELEMETRY:", telemetry)
             except Exception as e:
                 print("[UAV] Error receiving telemetry data:", str(e))
             time.sleep(1)
@@ -104,7 +129,7 @@ class Telem:
             return
         if not self.vehicle or not self.vehicle.armed:
             print("Vehicle not connected or not armed.")
-            self.arm_and_takeoff(6)
+            self.arm_and_takeoff(10)
         else:
             print("Already armed.")
         print("Starting mapping mission...")
@@ -113,13 +138,40 @@ class Telem:
             print(f"Moving to waypoint {i+1}: ({lat}, {lon}, {alt})")
             loc = LocationGlobalRelative(lat, lon, alt)
             self.vehicle.simple_goto(loc)
-            # For demo: wait until close enough to waypoint, or timeout
-            time.sleep(5)
+            while True:
+                current_location = self.vehicle.location.global_relative_frame
+                distance = haversine(
+                    current_location.lon, current_location.lat, lon, lat
+                )
+                print(f"Distance to waypoint {i+1}: {distance:.2f} meters")
+                if distance < 3:
+                    print(f"Reached waypoint {i+1}")
+                    # Capture image at this waypoint
+                    image_path = CaptureImage(OutputDirectory, i+1)
+                    time.sleep(2)  # Wait for a bit before next waypoint
+                    break
+                time.sleep(1)
+
 
     def close(self):
+        print("RTL")
+        if self.vehicle and self.vehicle.mode != VehicleMode("RTL"):
+            print("Setting mode to RTL (Return to Launch).")
+            self.vehicle.mode = VehicleMode("RTL")
+            while self.vehicle.mode != VehicleMode("RTL"):
+                print(" Waiting for mode change...")
+                time.sleep(1)
+        time.sleep(15)
+        if self.vehicle and self.vehicle.armed:
+            print("Disarming vehicle.")
+            self.vehicle.armed = False
+            while self.vehicle.armed:
+                print(" Waiting for disarming...")
+                time.sleep(1)
         if self.vehicle:
             print("Closing vehicle connection.")
             self.vehicle.close()
+
 
 if __name__ == "__main__":
     telem = Telem()
