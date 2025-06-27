@@ -175,4 +175,3 @@ class Telem:
 
 if __name__ == "__main__":
     telem = Telem()
-    # Add graceful shutdown as needed
