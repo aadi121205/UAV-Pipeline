@@ -1,7 +1,9 @@
 import time
 import threading
-from dronekit import connect, VehicleMode
+from dronekit import connect, VehicleMode, LocationGlobalRelative
 from math import radians, cos, sin, asin, sqrt
+from Map import Map  # Ensure your Map class provides needed staticmethods
+
 
 def haversine(lon1, lat1, lon2, lat2):
     lon1, lat1, lon2, lat2 = map(radians, [lon1, lat1, lon2, lat2])
@@ -10,26 +12,37 @@ def haversine(lon1, lat1, lon2, lat2):
         + cos(lat1) * cos(lat2) * sin((lon2 - lon1) / 2) ** 2
     )
     c = 2 * asin(sqrt(a))
-    return c * 6371 * 1000
+    return c * 6371 * 1000  # meters
 
-def Caluate_best_misssion(a, b, c, d):
-    """
-    Claculate the best mission based on square made by the above points in the order of a, b, c, d. To execue a maping mission, the drone will fly in a square pattern.
-    """
-    distance_ab = haversine(a[1], a[0], b[1], b[0])
-    distance_bc = haversine(b[1], b[0], c[1], c[0])
-    distance_cd = haversine(c[1], c[0], d[1], d[0])
-    distance_da = haversine(d[1], d[0], a[1], a[0])
-    
-    total_distance = distance_ab + distance_bc + distance_cd + distance_da
-    return total_distance
+def Caluate_best_misssion(NW=(28.75375609, 77.11578556), Altitude=6):
+    # Example input
+    NW_corner = NW
+    width_m = 30  # meters
+    length_m = 30
+    # Use your Map's staticmethod to make corners
+    corners = Map.make_square_corners(NW_corner, width_m, length_m)
+    mymap = Map(
+        square_corners=corners,
+        altitude=Altitude,  # meters
+        sensor_width_mm = 6.4,
+        sensor_height_mm = 4.0,
+        focal_length_mm = 1.93, # use RGB value
+        image_width_px = 1280,   # RGB maximum resolution
+        image_height_px = 800,   # RGB maximum resolution
+        overlap_front=0.7,
+        overlap_side=0.7
+    )
+    waypoints = mymap.get_waypoints()
+    return waypoints
 
 class Telem:
     def __init__(self):
-        self.DroneIP = "udp:0.0.0.0:14550"  # Change to your UAV's IP
+        self.DroneIP = "udp:0.0.0.0:14550"  # Change as needed
         self.vehicle = None
         self.connect_uav()
+        time.sleep(2)
         threading.Thread(target=self.send_telemetry_data, daemon=True).start()
+        self.execute_maping_mission()
 
     def connect_uav(self):
         try:
@@ -38,34 +51,35 @@ class Telem:
             print("[UAV] Connected to UAV")
         except Exception as e:
             print("[UAV] Connection error: ", str(e))
-            time.sleep(1)
+            time.sleep(2)
+            # Optionally retry connect here
 
     def send_telemetry_data(self):
         while True:
             try:
                 v = self.vehicle
                 telemetry = {
-                    "mode": v.mode.name,
-                    "armed": v.armed,
+                    "mode": v.mode.name if v else None,
+                    "armed": v.armed if v else None,
                     "location": {
-                        "lat": v.location.global_frame.lat,
-                        "lon": v.location.global_frame.lon,
-                        "alt": v.location.global_frame.alt,
+                        "lat": v.location.global_frame.lat if v else None,
+                        "lon": v.location.global_frame.lon if v else None,
+                        "alt": v.location.global_frame.alt if v else None,
                     },
-                    "battery": v.battery.level,
+                    "battery": v.battery.level if v else None,
                     "gps": {
-                        "fix_type": v.gps_0.fix_type,
-                        "satellites_visible": v.gps_0.satellites_visible,
+                        "fix_type": v.gps_0.fix_type if v else None,
+                        "satellites_visible": v.gps_0.satellites_visible if v else None,
                     },
-                    "heading": v.heading,
-                    "velocity": v.velocity,
-                    "last_heartbeat": v.last_heartbeat,
+                    "heading": v.heading if v else None,
+                    "velocity": v.velocity if v else None,
+                    "last_heartbeat": v.last_heartbeat if v else None,
                 }
-                return telemetry
+                print("TELEMETRY:", telemetry)
             except Exception as e:
                 print("[UAV] Error receiving telemetry data:", str(e))
             time.sleep(1)
-    
+
     def arm_and_takeoff(self, target_altitude):
         print("Arming motors")
         self.vehicle.mode = VehicleMode("GUIDED")
@@ -76,18 +90,37 @@ class Telem:
         print("Taking off!")
         self.vehicle.simple_takeoff(target_altitude)
         while True:
-            print(f" Altitude: {self.vehicle.location.global_relative_frame.alt}")
-            if self.vehicle.location.global_relative_frame.alt >= target_altitude * 0.95:
+            alt = self.vehicle.location.global_relative_frame.alt
+            print(f" Altitude: {alt:.2f}")
+            if alt >= target_altitude * 0.95:
                 print("Reached target altitude")
                 break
             time.sleep(1)
 
+    def execute_maping_mission(self):
+        waypoints = Caluate_best_misssion()
+        if not waypoints or not isinstance(waypoints, list):
+            print("No waypoints generated.")
+            return
+        if not self.vehicle or not self.vehicle.armed:
+            print("Vehicle not connected or not armed.")
+            self.arm_and_takeoff(6)
+        else:
+            print("Already armed.")
+        print("Starting mapping mission...")
+        for i, waypoint in enumerate(waypoints):
+            lat, lon, alt = waypoint
+            print(f"Moving to waypoint {i+1}: ({lat}, {lon}, {alt})")
+            loc = LocationGlobalRelative(lat, lon, alt)
+            self.vehicle.simple_goto(loc)
+            # For demo: wait until close enough to waypoint, or timeout
+            time.sleep(5)
+
+    def close(self):
+        if self.vehicle:
+            print("Closing vehicle connection.")
+            self.vehicle.close()
 
 if __name__ == "__main__":
     telem = Telem()
-    while True:
-        time.sleep(0.5)
-        telemetry_data = telem.send_telemetry_data()
-        if telemetry_data:
-            print("Telemetry Data:", telemetry_data)
-
+    # Add graceful shutdown as needed
