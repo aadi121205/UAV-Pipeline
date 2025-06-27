@@ -11,7 +11,6 @@ if not os.path.exists(OutputDirectory):
     os.makedirs(OutputDirectory)
 
 
-
 def CaptureImage(OutputDirectory=OutputDirectory, image_index=0):
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
@@ -21,11 +20,14 @@ def CaptureImage(OutputDirectory=OutputDirectory, image_index=0):
     if not ret:
         print("Error: Could not read frame from video device.")
         return None
-    filename = os.path.join(OutputDirectory, f"image_{int(time.time())}_{image_index}.jpg")
+    filename = os.path.join(
+        OutputDirectory, f"image_{int(time.time())}_{image_index}.jpg"
+    )
     cv2.imwrite(filename, frame)
     cap.release()
     print(f"Image captured and saved to {filename}")
     return filename
+
 
 def haversine(lon1, lat1, lon2, lat2):
     lon1, lat1, lon2, lat2 = map(radians, [lon1, lat1, lon2, lat2])
@@ -100,7 +102,7 @@ class Telem:
                     "velocity": v.velocity if v else None,
                     "last_heartbeat": v.last_heartbeat if v else None,
                 }
-                #print("TELEMETRY:", telemetry)
+                # print("TELEMETRY:", telemetry)
             except Exception as e:
                 print("[UAV] Error receiving telemetry data:", str(e))
             time.sleep(1)
@@ -147,11 +149,10 @@ class Telem:
                 if distance < 3:
                     print(f"Reached waypoint {i+1}")
                     # Capture image at this waypoint
-                    image_path = CaptureImage(OutputDirectory, i+1)
+                    image_path = CaptureImage(OutputDirectory, i + 1)
                     time.sleep(2)  # Wait for a bit before next waypoint
                     break
                 time.sleep(1)
-
 
     def close(self):
         print("RTL")
