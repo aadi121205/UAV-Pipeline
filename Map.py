@@ -1,5 +1,28 @@
 import numpy as np
 from geographiclib.geodesic import Geodesic
+import matplotlib.pyplot as plt
+
+def plot_waypoints(square_corners, waypoints):
+    # Extract lats and lons
+    lats = [wp[0] for wp in waypoints]
+    lons = [wp[1] for wp in waypoints]
+    # Corner polygon
+    corner_lats = [pt[0] for pt in square_corners] + [square_corners[0][0]]
+    corner_lons = [pt[1] for pt in square_corners] + [square_corners[0][1]]
+
+    plt.figure(figsize=(8, 8))
+    # Draw area
+    plt.plot(corner_lons, corner_lats, 'k-', label='Mapping Area', linewidth=2)
+    # Draw waypoints
+    plt.scatter(lons, lats, c='red', s=15, label='Waypoints')
+    # Draw lines (flight path)
+    plt.plot(lons, lats, 'b--', alpha=0.5, label='Path')
+    plt.xlabel('Longitude')
+    plt.ylabel('Latitude')
+    plt.title('Mapping Mission Waypoints')
+    plt.legend()
+    plt.grid(True)
+    plt.show()
 
 def gps_to_xy(ref_lat, ref_lon, lat, lon):
     """Convert lat/lon to local tangent XY (meters) using the reference point as (0,0)."""
@@ -11,7 +34,6 @@ def gps_to_xy(ref_lat, ref_lon, lat, lon):
 
 def xy_to_gps(ref_lat, ref_lon, x, y):
     """Convert local tangent XY (meters) to lat/lon using the reference point as (0,0)."""
-    # Distance and azimuth from origin
     s = np.hypot(x, y)
     azi = np.degrees(np.arctan2(x, y))
     g = Geodesic.WGS84.Direct(ref_lat, ref_lon, azi, s)
@@ -32,7 +54,7 @@ def generate_mapping_waypoints(square_corners, altitude, sensor_width_mm, sensor
     altitude: mapping altitude in meters
     camera/sensor parameters as per above
     """
-    # Reference point (lower left)
+    # Reference point (first corner)
     ref_lat, ref_lon = square_corners[0]
     # Convert all corners to XY
     xy_corners = [gps_to_xy(ref_lat, ref_lon, lat, lon) for lat, lon in square_corners]
@@ -54,11 +76,9 @@ def generate_mapping_waypoints(square_corners, altitude, sensor_width_mm, sensor
         row_points = []
         x = min_x
         while x <= max_x:
-            # Check if within polygon (optional)
             lat, lon = xy_to_gps(ref_lat, ref_lon, x, y)
             row_points.append((lat, lon, altitude))
             x += step_x
-        # Zig-zag path for efficiency
         if row % 2 == 1:
             row_points = row_points[::-1]
         waypoints.extend(row_points)
@@ -66,18 +86,43 @@ def generate_mapping_waypoints(square_corners, altitude, sensor_width_mm, sensor
         row += 1
     return waypoints
 
+def make_square_corners(NW, width_m, length_m):
+    """
+    Given NW corner, width (East, in meters), and length (South, in meters), 
+    compute the other three corners using geodesic calculation for accuracy.
+    Returns corners as [NW, NE, SE, SW] (clockwise).
+    """
+    NW_lat, NW_lon = NW
+
+    # Move east for width (azimuth 90)
+    NE = Geodesic.WGS84.Direct(NW_lat, NW_lon, 90, width_m)
+    NE_lat, NE_lon = NE['lat2'], NE['lon2']
+
+    # Move south from NE for length (azimuth 180)
+    SE = Geodesic.WGS84.Direct(NE_lat, NE_lon, 180, length_m)
+    SE_lat, SE_lon = SE['lat2'], SE['lon2']
+
+    # Move south from NW for length (azimuth 180)
+    SW = Geodesic.WGS84.Direct(NW_lat, NW_lon, 180, length_m)
+    SW_lat, SW_lon = SW['lat2'], SW['lon2']
+
+    return [(NW_lat, NW_lon), (NE_lat, NE_lon), (SE_lat, SE_lon), (SW_lat, SW_lon)]  # Clockwise
+
 # ====== Example usage ======
 if __name__ == "__main__":
-    # (Corners in counterclockwise or clockwise order)
-    square = [
-        (28.7500, 77.1100),  # SW
-        (28.7500, 77.1200),  # SE
-        (28.7600, 77.1200),  # NE
-        (28.7600, 77.1100)   # NW
-    ]
+    # North-West corner (lat, lon)
+    NW = (28.75375609, 77.11578556)
+    width_m = 30  # in meters
+    length_m = 30  # in meters
+
+    square = make_square_corners(NW, width_m, length_m)
+    print("Square Corners (lat, lon):")
+    for corner in square:
+        print(corner)
+    print("\nGenerated Waypoints:")
     waypoints = generate_mapping_waypoints(
         square_corners=square,
-        altitude=100,  # meters
+        altitude=6,  # meters
         sensor_width_mm=13.2,
         sensor_height_mm=8.8,
         focal_length_mm=8.8,
@@ -88,3 +133,5 @@ if __name__ == "__main__":
     )
     for wp in waypoints:
         print(wp)
+
+    plot_waypoints(square, waypoints)
