@@ -5,11 +5,124 @@ from math import radians, cos, sin, asin, sqrt
 from Map import Map  # Ensure your Map class provides needed staticmethods
 import os
 import cv2
+from ultralytics import YOLO
+from pymavlink import mavutil
+import numpy as np
 
 OutputDirectory = os.path.join(os.getcwd(), "Output")
 if not os.path.exists(OutputDirectory):
     os.makedirs(OutputDirectory)
 
+# === Load YOLO model ===
+model = YOLO("yolov8n.pt")
+print("Model loaded")
+
+# === Open camera feed ===
+cap = cv2.VideoCapture(0)
+if not cap.isOpened():
+    print("Error: Could not open video stream")
+    exit()
+
+FRAME_WIDTH = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+FRAME_HEIGHT = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+CENTER_X = FRAME_WIDTH // 2
+CENTER_Y = FRAME_HEIGHT // 2
+TOLERANCE_X = FRAME_WIDTH * 0.10  # 10% error tolerance
+TOLERANCE_Y = FRAME_HEIGHT * 0.10
+
+cap.release()
+
+# === Send local NED velocity ===
+
+def send_ned_velocity(vehicle, vx, vy, vz, duration=1):
+    """
+    Move vehicle in direction based on specified velocity vectors.
+    Args:
+        vehicle: dronekit.Vehicle object
+        vx: velocity in x direction (m/s), forward is positive
+        vy: velocity in y direction (m/s), right is positive
+        vz: velocity in z direction (m/s), down is positive
+        duration: seconds to send the command (sends at 1Hz)
+    """
+    msg = vehicle.message_factory.set_position_target_local_ned_encode(
+        0,      # time_boot_ms (ignored)
+        0, 0,   # target system, target component
+        mavutil.mavlink.MAV_FRAME_BODY_NED,  # frame
+        0b0000111111000111,  # type_mask (only velocity enabled)
+        0, 0, 0,             # x, y, z positions (not used)
+        vx, vy, vz,          # velocities (m/s)
+        0, 0, 0,             # accelerations (not used)
+        0, 0                 # yaw, yaw_rate (not used)
+    )
+    for _ in range(duration):
+        vehicle.send_mavlink(msg)
+        time.sleep(1)
+
+def Geo():
+    # === Main control loop ===
+    print("Tracking...")
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        results = model.predict(frame, conf=0.5)
+        boxes = results[0].boxes
+
+        person_found = False
+
+        for box in boxes:
+            cls = int(box.cls[0])
+            if model.names[cls] == "person":
+                person_found = True
+                x1, y1, x2, y2 = map(int, box.xyxy[0])
+                bbox_center_x = (x1 + x2) // 2
+                bbox_center_y = (y1 + y2) // 2
+
+                offset_x = bbox_center_x - CENTER_X
+                offset_y = bbox_center_y - CENTER_Y
+
+                # Draw
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                cv2.line(frame, (CENTER_X, 0), (CENTER_X, FRAME_HEIGHT), (255, 0, 0), 2)
+                cv2.line(frame, (0, CENTER_Y), (FRAME_WIDTH, CENTER_Y), (255, 0, 0), 2)
+                cv2.circle(frame, (bbox_center_x, bbox_center_y), 5, (0, 0, 255), -1)
+                cv2.putText(
+                    frame,
+                    f"Offset X: {offset_x} Y: {offset_y}",
+                    (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.8,
+                    (0, 0, 255),
+                    2,
+                )
+
+                # === Movement Control Logic ===
+                if abs(offset_x) > TOLERANCE_X or abs(offset_y) > TOLERANCE_Y:
+                    # Proportional control to velocity (scale factor)
+                    scale = 0.0025  # You can tune this
+                    vy = -scale * offset_x  # Left/right
+                    vx = -scale * offset_y  # Forward/backward (inverted Y axis)
+                    vx = np.clip(vx, -0.5, 0.5)
+                    vy = np.clip(vy, -0.5, 0.5)
+                    send_ned_velocity(vx, vy, 0, duration=1)
+
+                break
+
+        if not person_found:
+            cv2.putText(
+                frame,
+                "No person detected",
+                (10, 30),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.8,
+                (0, 0, 255),
+                2,
+            )
+
+        cv2.imshow("Drone Cam", frame)
+        if cv2.waitKey(1) & 0xFF == ord("q"):
+            break
 
 def CaptureImage(OutputDirectory=OutputDirectory, image_index=0):
     cap = cv2.VideoCapture(0)
